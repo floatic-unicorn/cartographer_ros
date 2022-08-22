@@ -17,6 +17,8 @@
 #include <cmath>
 #include <string>
 #include <vector>
+#include <thread>
+#include <future>
 
 #include "Eigen/Core"
 #include "Eigen/Geometry"
@@ -45,6 +47,8 @@ DEFINE_bool(include_frozen_submaps, true,
             "Include frozen submaps in the occupancy grid.");
 DEFINE_bool(include_unfrozen_submaps, true,
             "Include unfrozen submaps in the occupancy grid.");
+DEFINE_bool(occupancy_grid_once, true,
+            "publish occupancy_grid only one time");
 DEFINE_string(occupancy_grid_topic, cartographer_ros::kOccupancyGridTopic,
               "Name of the topic on which the occupancy grid is published.");
 
@@ -54,6 +58,8 @@ namespace {
 using ::cartographer::io::PaintSubmapSlicesResult;
 using ::cartographer::io::SubmapSlice;
 using ::cartographer::mapping::SubmapId;
+
+using std::chrono_literals::operator""s;
 
 class Node : public rclcpp::Node
 {
@@ -67,8 +73,8 @@ class Node : public rclcpp::Node
  private:
   void HandleSubmapList(const cartographer_ros_msgs::msg::SubmapList::ConstSharedPtr& msg);
   void DrawAndPublish();
-
   const double resolution_;
+  int publish_count_;
 
   absl::Mutex mutex_;
   rclcpp::CallbackGroup::SharedPtr callback_group_;
@@ -84,7 +90,7 @@ class Node : public rclcpp::Node
 
 Node::Node(const double resolution, const double publish_period_sec)
     : rclcpp::Node("cartographer_occupancy_grid_node"),
-      resolution_(resolution)
+      resolution_(resolution), publish_count_(0)
 {
   callback_group_ = this->create_callback_group(
     rclcpp::CallbackGroupType::MutuallyExclusive,
@@ -103,7 +109,7 @@ Node::Node(const double resolution, const double publish_period_sec)
   occupancy_grid_publisher_timer_ = this->create_wall_timer(
     std::chrono::milliseconds(int(publish_period_sec * 1000)),
     [this]() {
-      DrawAndPublish();
+        DrawAndPublish();
     });
 
   auto handleSubmapList =
@@ -175,14 +181,25 @@ Node::Node(const double resolution, const double publish_period_sec)
 }
 
 void Node::DrawAndPublish() {
-  absl::MutexLock locker(&mutex_);
-  if (submap_slices_.empty() || last_frame_id_.empty()) {
-    return;
+  if(FLAGS_occupancy_grid_once && publish_count_)
+  {
+      occupancy_grid_publisher_timer_->reset();
+      return;
   }
+
+  absl::MutexLock locker(&mutex_);
+
+  if (submap_slices_.empty() || last_frame_id_.empty()) {
+      return;
+  }
+
   auto painted_slices = PaintSubmapSlices(submap_slices_, resolution_);
   std::unique_ptr<nav_msgs::msg::OccupancyGrid> msg_ptr = CreateOccupancyGridMsg(
       painted_slices, resolution_, last_frame_id_, last_timestamp_);
   occupancy_grid_publisher_->publish(*msg_ptr);
+  publish_count_++;
+  LOG(INFO) << "Occupancy Grid Publisher Times : " << publish_count_;
+
 }
 
 }  // namespace
