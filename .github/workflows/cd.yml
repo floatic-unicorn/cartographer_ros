@@ -1,11 +1,8 @@
 name: CD
-on: 
-  pull_request:
-    branches: [ ros2 ]
-# on:
-#   push:
-#     tags:
-#       - v*
+on:
+  push:
+    tags:
+      - v*
 
 jobs:
   ecr_setting:
